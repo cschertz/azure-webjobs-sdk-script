@@ -42,7 +42,7 @@ namespace WebJobs.Script.Cli.Verbs
 
         private static void ConfigureDefaultEnvironmentVariables()
         {
-            Environment.SetEnvironmentVariable("EDGE_NODE_PARAMS", "--debug", EnvironmentVariableTarget.Process);
+            //Environment.SetEnvironmentVariable("EDGE_NODE_PARAMS", "--debug", EnvironmentVariableTarget.Process);
         }
 
         public override async Task RunAsync()

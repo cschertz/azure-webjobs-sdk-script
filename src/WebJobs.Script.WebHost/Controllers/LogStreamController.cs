@@ -31,7 +31,12 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Controllers
         {
             var request = controllerContext.Request;
             var filter = request.RequestUri.ParseQueryString()[FilterQueryKey];
-            var routePath = request.RequestUri.AbsolutePath.Substring("/api/logstream".Length).Trim('/');
+            var routePath = request.RequestUri.AbsolutePath.Substring("/admin/logstream".Length).Trim('/');
+            // TODO: understand what's going on here
+            if (routePath.StartsWith("am/"))
+            {
+                routePath = routePath.Substring(2);
+            }
 
             var path = FileSystemHelpers.EnsureDirectory(Path.Combine(_environment.ApplicationLogFilesPath, routePath));
 
