@@ -109,6 +109,7 @@ namespace WebJobs.Script.Cli.Verbs
                     NetSH.CMD.Http.Add.SSLCert(
                         ipPort: $"0.0.0.0:{Port}",
                         certHash: cert.Thumbprint,
+                        certStoreName: "MY",
                         appId: Assembly.GetExecutingAssembly().GetType().GUID);
                 }
             }

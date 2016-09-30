@@ -84,8 +84,7 @@ namespace WebJobs.Script.Cli.Helpers
             cert.Subject = dn;
             cert.Issuer = dn; // the issuer and the subject are the same
             cert.NotBefore = DateTime.Now;
-            // this cert expires immediately. Change to whatever makes sense for you
-            cert.NotAfter = DateTime.Now.AddYears(1);
+            cert.NotAfter = DateTime.Now.AddYears(5);
             cert.X509Extensions.Add((CX509Extension)eku); // add the EKU
             cert.HashAlgorithm = hashobj; // Specify the hashing algorithm
             cert.Encode(); // encode the certificate
@@ -97,17 +96,16 @@ namespace WebJobs.Script.Cli.Helpers
             string csr = enroll.CreateRequest(); // Output the request in base64
                                                  // and install it back as the response
             enroll.InstallResponse(InstallResponseRestrictionFlags.AllowUntrustedCertificate,
-                csr, EncodingType.XCN_CRYPT_STRING_BASE64, ""); // no password
+                csr, EncodingType.XCN_CRYPT_STRING_BASE64, string.Empty); // no password
                                                                 // output a base64 encoded PKCS#12 so we can import it back to the .Net security classes
-            var base64encoded = enroll.CreatePFX("", // no password, this is for internal consumption
+            var base64encoded = enroll.CreatePFX(string.Empty, // no password, this is for internal consumption
                 PFXExportOptions.PFXExportChainWithRoot);
 
             // instantiate the target class with the PKCS#12 data (and the empty password)
-            return new System.Security.Cryptography.X509Certificates.X509Certificate2(
-                System.Convert.FromBase64String(base64encoded), "",
+            return new X509Certificate2(
+                Convert.FromBase64String(base64encoded), string.Empty,
                 // mark the private key as exportable (this is usually what you want to do)
-                System.Security.Cryptography.X509Certificates.X509KeyStorageFlags.Exportable
-            );
+                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.PersistKeySet);
         }
     }
 }
