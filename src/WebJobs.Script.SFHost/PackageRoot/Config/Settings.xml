@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<Settings xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.microsoft.com/2011/01/fabric">
+  <!-- Add your custom configuration sections and parameters here -->
+  <Section Name="Config">
+    <Parameter Name="AzureWebJobsScriptRoot" Value="C:\depot\oss\azure-webjobs-sdk-script\sample" />
+    <Parameter Name="AzureWebSecretsPath" Value="C:\depot\oss\azure-webjobs-sdk-script\WebJobs.Script.SFHost\App_Data\secrets" />
+    <Parameter Name="FunctionsStorageAccount" Value="DefaultEndpointsProtocol=https;AccountName=cschertzccstoragedev;AccountKey=M2h+TGCcOPX5musYCenWbUIwg08k2yqVNdZcr2yvks6LEL0DdnDCOnkLoWRFWvIXzdeL7v4q09P2P7wj3Q6Psw=="/>
+    
+  </Section>
+</Settings>
