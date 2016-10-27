@@ -54,6 +54,7 @@ namespace Microsoft.Azure.WebJobs.Script.Description
         private static readonly List<ISharedAssemblyProvider> SharedAssemblyProviders = new List<ISharedAssemblyProvider>
             {
                 new DirectSharedAssemblyProvider(typeof(Newtonsoft.Json.JsonConvert).Assembly), /* Newtonsoft.Json */
+                new DirectSharedAssemblyProvider(typeof(ServiceBusAttribute).Assembly), /* Microsoft.Azure.WebJobs.ServiceBus */
                 new DirectSharedAssemblyProvider(typeof(WindowsAzure.Storage.StorageUri).Assembly), /* Microsoft.WindowsAzure.Storage */
                 new LocalSharedAssemblyProvider(@"^Microsoft\.AspNet\.WebHooks\..*"), /* Microsoft.AspNet.WebHooks.* */
             };

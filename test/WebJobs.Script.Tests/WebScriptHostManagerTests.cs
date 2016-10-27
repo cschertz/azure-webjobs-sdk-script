@@ -10,8 +10,10 @@ using System.Linq;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Web.Http;
+using System.Web.Http.Routing;
 using Microsoft.Azure.WebJobs.Host;
-using Microsoft.Azure.WebJobs.Script.Description;
+using Microsoft.Azure.WebJobs.Script.Config;
 using Microsoft.Azure.WebJobs.Script.Tests;
 using Microsoft.Azure.WebJobs.Script.WebHost.Diagnostics;
 using Moq;
@@ -22,6 +24,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
 {
     public class WebScriptHostManagerTests : IClassFixture<WebScriptHostManagerTests.Fixture>, IDisposable
     {
+        private readonly ScriptSettingsManager _settingsManager;
         private Fixture _fixture;
 
         // Some tests need their own manager that differs from the fixture.
@@ -30,6 +33,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
         public WebScriptHostManagerTests(Fixture fixture)
         {
             _fixture = fixture;
+            _settingsManager = ScriptSettingsManager.Instance;
         }
 
         [Fact]
@@ -103,9 +107,9 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 RootLogPath = logDir,
                 FileLoggingMode = FileLoggingMode.Always
             };
-            ISecretManager secretManager = new SecretManager(secretsDir);
+            ISecretManager secretManager = new SecretManager(_settingsManager, secretsDir);
             WebHostSettings webHostSettings = new WebHostSettings();
-            ScriptHostManager hostManager = new WebScriptHostManager(config, secretManager, webHostSettings);
+            ScriptHostManager hostManager = new WebScriptHostManager(config, secretManager, _settingsManager, webHostSettings);
 
             Task runTask = Task.Run(() => hostManager.RunAndBlock());
 
@@ -140,16 +144,16 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 FileLoggingMode = FileLoggingMode.Always,
                 RestartInterval = TimeSpan.FromMilliseconds(500)
             };
-            SecretManager secretManager = new SecretManager(secretsDir);
+            SecretManager secretManager = new SecretManager(_settingsManager, secretsDir);
             WebHostSettings webHostSettings = new WebHostSettings();
             var factoryMock = new Mock<IScriptHostFactory>();
             int count = 0;
-            factoryMock.Setup(p => p.Create(config)).Callback(() =>
+            factoryMock.Setup(p => p.Create(_settingsManager, config)).Callback(() =>
             {
                 count++;
             }).Throws(new Exception("Kaboom!"));
 
-            ScriptHostManager hostManager = new WebScriptHostManager(config, secretManager, webHostSettings, factoryMock.Object);
+            ScriptHostManager hostManager = new WebScriptHostManager(config, secretManager, _settingsManager, webHostSettings, factoryMock.Object);
 
             Task runTask = Task.Run(() => hostManager.RunAndBlock());
 
@@ -194,6 +198,42 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
             Assert.DoesNotContain(trace.Traces, t => t.Message == "A function timeout has occurred. Host is shutting down.");
         }
 
+        [Fact]
+        public void AddRouteDataToRequest_DoesNotAddRequestProperty_WhenRouteDataNull()
+        {
+            var mockRouteData = new Mock<IHttpRouteData>(MockBehavior.Strict);
+            IDictionary<string, object> values = null;
+            mockRouteData.Setup(p => p.Values).Returns(values);
+            HttpRequestMessage request = new HttpRequestMessage();
+
+            WebScriptHostManager.AddRouteDataToRequest(mockRouteData.Object, request);
+
+            Assert.False(request.Properties.ContainsKey(ScriptConstants.AzureFunctionsHttpRouteDataKey));
+        }
+
+        [Fact]
+        public void AddRouteDataToRequest_AddsRequestProperty_WhenRouteDataNotNull()
+        {
+            var mockRouteData = new Mock<IHttpRouteData>(MockBehavior.Strict);
+            IDictionary<string, object> values = new Dictionary<string, object>
+            {
+                { "p1", "abc" },
+                { "p2", 123 },
+                { "p3", null },
+                { "p4", RouteParameter.Optional }
+            };
+            mockRouteData.Setup(p => p.Values).Returns(values);
+            HttpRequestMessage request = new HttpRequestMessage();
+
+            WebScriptHostManager.AddRouteDataToRequest(mockRouteData.Object, request);
+
+            var result = (IDictionary<string, object>)request.Properties[ScriptConstants.AzureFunctionsHttpRouteDataKey];
+            Assert.Equal(result["p1"], "abc");
+            Assert.Equal(result["p2"], 123);
+            Assert.Equal(result["p3"], null);
+            Assert.Equal(result["p4"], null);
+        }
+
         private async Task RunTimeoutExceptionTest(TraceWriter trace, bool handleCancellation)
         {
             TimeSpan gracePeriod = TimeSpan.FromMilliseconds(5000);
@@ -222,7 +262,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 FunctionTimeout = TimeSpan.FromSeconds(3)
             };
 
-            var manager = new WebScriptHostManager(config, new SecretManager(), new WebHostSettings());
+            var manager = new WebScriptHostManager(config, new SecretManager(), _settingsManager, new WebHostSettings());
             Task task = Task.Run(() => { manager.RunAndBlock(); });
             await TestHelpers.Await(() => manager.IsRunning);
 
@@ -240,9 +280,12 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
 
         public class Fixture : IDisposable
         {
+            private readonly ScriptSettingsManager _settingsManager;
+
             public Fixture()
             {
                 EventGenerator = new TestSystemEventGenerator();
+                _settingsManager = ScriptSettingsManager.Instance;
 
                 TestFunctionRoot = Path.Combine(TestHelpers.FunctionsTestDirectory, "Functions");
                 TestLogsRoot = Path.Combine(TestHelpers.FunctionsTestDirectory, "Logs");
@@ -278,13 +321,13 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                     FileLoggingMode = FileLoggingMode.Always
                 };
 
-                ISecretManager secretManager = new SecretManager(SecretsPath);
+                ISecretManager secretManager = new SecretManager(_settingsManager, SecretsPath);
                 WebHostSettings webHostSettings = new WebHostSettings();
 
                 var hostConfig = config.HostConfig;
                 var testEventGenerator = new TestSystemEventGenerator();
                 hostConfig.AddService<IEventGenerator>(EventGenerator);
-                var mockHostManager = new WebScriptHostManager(config, secretManager, webHostSettings);
+                var mockHostManager = new WebScriptHostManager(config, secretManager, _settingsManager, webHostSettings);
                 HostManager = mockHostManager;
                 Task task = Task.Run(() => { HostManager.RunAndBlock(); });
 
@@ -302,7 +345,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                     @"Info Generating ([0-9]+) job function\(s\)",
                     @"Info Starting Host \(HostId=function-tests-node, Version=(.+), ProcessId=[0-9]+, Debug=False\)",
                     "Info WebJobs.Indexing Found the following functions:",
-                    "Verbose The next 5 occurrences of the schedule will be:",
+                    "Info The next 5 occurrences of the schedule will be:",
                     "Info WebJobs.Host Job host started",
                     "Error The following 1 functions are in error:"
                 };

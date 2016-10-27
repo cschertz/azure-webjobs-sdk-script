@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Azure.WebJobs.Host;
+using Microsoft.Azure.WebJobs.Script.Config;
 using Microsoft.Azure.WebJobs.Script.Diagnostics;
 
 namespace Microsoft.Azure.WebJobs.Script
@@ -35,14 +36,17 @@ namespace Microsoft.Azure.WebJobs.Script
         private AutoResetEvent _stopEvent = new AutoResetEvent(false);
         private TraceWriter _traceWriter;
 
+        private ScriptSettingsManager _settingsManager;
+
         public ScriptHostManager(ScriptHostConfiguration config)
-            : this(config, new ScriptHostFactory())
+            : this(config, ScriptSettingsManager.Instance, new ScriptHostFactory())
         {
         }
 
-        public ScriptHostManager(ScriptHostConfiguration config, IScriptHostFactory scriptHostFactory)
+        public ScriptHostManager(ScriptHostConfiguration config, ScriptSettingsManager settingsManager, IScriptHostFactory scriptHostFactory)
         {
             _config = config;
+            _settingsManager = settingsManager;
             _scriptHostFactory = scriptHostFactory;
         }
 
@@ -63,7 +67,7 @@ namespace Microsoft.Azure.WebJobs.Script
         /// <summary>
         /// Gets the last host <see cref="Exception"/> that has occurred.
         /// </summary>
-        public Exception LastError { get; private set; }
+        public virtual Exception LastError { get; private set; }
 
         public void RunAndBlock(CancellationToken cancellationToken = default(CancellationToken))
         {
@@ -82,7 +86,7 @@ namespace Microsoft.Azure.WebJobs.Script
                         HostId = _config.HostConfig.HostId
                     };
                     OnInitializeConfig(_config);
-                    newInstance = _scriptHostFactory.Create(_config);
+                    newInstance = _scriptHostFactory.Create(_settingsManager, _config);
 
                     _traceWriter = newInstance.TraceWriter;
 

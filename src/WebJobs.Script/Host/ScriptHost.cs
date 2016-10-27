@@ -44,6 +44,7 @@ namespace Microsoft.Azure.WebJobs.Script
         private static readonly TimeSpan MinTimeout = TimeSpan.FromSeconds(1);
         private static readonly TimeSpan MaxTimeout = TimeSpan.FromMinutes(5);
         private static readonly Regex FunctionNameValidationRegex = new Regex(@"^[a-z][a-z0-9_\-]{0,127}$(?<!^host$)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static ScriptSettingsManager _settingsManager;
 
         protected ScriptHost(ScriptHostConfiguration scriptConfig)
             : base(scriptConfig.HostConfig)
@@ -63,7 +64,7 @@ namespace Microsoft.Azure.WebJobs.Script
             {
                 if (_instanceId == null)
                 {
-                    _instanceId = Environment.GetEnvironmentVariable(EnvironmentSettingNames.AzureWebsiteInstanceId)
+                    _instanceId = _settingsManager.GetSetting(EnvironmentSettingNames.AzureWebsiteInstanceId)
                         ?? Environment.MachineName.GetHashCode().ToString("X").PadLeft(32, '0');
 
                     _instanceId = _instanceId.Substring(0, 32);
@@ -94,6 +95,19 @@ namespace Microsoft.Azure.WebJobs.Script
             get
             {
                 return _restartEvent;
+            }
+        }
+
+        public ScriptSettingsManager SettingsManager
+        {
+            get
+            {
+                return _settingsManager;
+            }
+
+            private set
+            {
+                _settingsManager = value;
             }
         }
 
@@ -171,6 +185,10 @@ namespace Microsoft.Azure.WebJobs.Script
 
         protected virtual void Initialize()
         {
+            string hostLogPath = Path.Combine(ScriptConfig.RootLogPath, "Host");
+            string debugSentinelFileName = Path.Combine(hostLogPath, ScriptConstants.DebugSentinelFileName);
+            this.LastDebugNotify = File.GetLastWriteTime(debugSentinelFileName);
+
             IMetricsLogger metricsLogger = ScriptConfig.HostConfig.GetService<IMetricsLogger>();
             if (metricsLogger == null)
             {
@@ -189,20 +207,13 @@ namespace Microsoft.Azure.WebJobs.Script
                     File.WriteAllText(hostConfigFilePath, "{}");
                 }
 
-                if (ScriptConfig.HostConfig.IsDevelopment)
+                if (ScriptConfig.HostConfig.IsDevelopment || InDebugMode)
                 {
+                    // If we're in debug/development mode, use optimal debug settings
                     ScriptConfig.HostConfig.UseDevelopmentSettings();
-                }
-                else
-                {
-                    // TEMP: Until https://github.com/Azure/azure-webjobs-sdk-script/issues/100 is addressed
-                    // we're using some presets that are a good middle ground
-                    ScriptConfig.HostConfig.Queues.MaxPollingInterval = TimeSpan.FromSeconds(10);
-                    ScriptConfig.HostConfig.Singleton.ListenerLockPeriod = TimeSpan.FromSeconds(15);
                 }
 
                 string json = File.ReadAllText(hostConfigFilePath);
-
                 JObject hostConfig;
                 try
                 {
@@ -250,10 +261,6 @@ namespace Microsoft.Azure.WebJobs.Script
                     // if no TraceWriter has been configured, default it to Console
                     TraceWriter = new ConsoleTraceWriter(hostTraceLevel);
                 }
-
-                string hostLogPath = Path.Combine(ScriptConfig.RootLogPath, "Host");
-                string debugSentinelFileName = Path.Combine(hostLogPath, ScriptConstants.DebugSentinelFileName);
-                this.LastDebugNotify = File.GetLastWriteTime(debugSentinelFileName);
 
                 _debugModeFileWatcher = new FileSystemWatcher(hostLogPath, ScriptConstants.DebugSentinelFileName)
                 {
@@ -456,11 +463,17 @@ namespace Microsoft.Azure.WebJobs.Script
             }
         }
 
-        public static ScriptHost Create(ScriptHostConfiguration scriptConfig = null)
+        public static ScriptHost Create(ScriptSettingsManager settingsManager = null, ScriptHostConfiguration scriptConfig = null)
         {
             if (scriptConfig == null)
             {
                 scriptConfig = new ScriptHostConfiguration();
+            }
+
+            _settingsManager = settingsManager;
+            if (settingsManager == null)
+            {
+                _settingsManager = ScriptSettingsManager.Instance;
             }
 
             if (!Path.IsPathRooted(scriptConfig.RootScriptPath))
@@ -622,7 +635,7 @@ namespace Microsoft.Azure.WebJobs.Script
                 catch (Exception ex)
                 {
                     // log any unhandled exceptions and continue
-                    AddFunctionError(functionName, ex.Message);
+                    AddFunctionError(functionName, Utility.FlattenException(ex, includeSource: false));
                 }
             }
 
@@ -656,7 +669,7 @@ namespace Microsoft.Azure.WebJobs.Script
             string scriptFile = DeterminePrimaryScriptFile(functionConfig, functionFiles);
             if (string.IsNullOrEmpty(scriptFile))
             {
-                error = 
+                error =
                     "Unable to determine the primary function script. Try renaming your entry point script to 'run' (or 'index' in the case of Node), " +
                     "or alternatively you can specify the name of the entry point script explicitly by adding a 'scriptFile' property to your function metadata.";
                 return false;
@@ -817,7 +830,7 @@ namespace Microsoft.Azure.WebJobs.Script
                 catch (Exception ex)
                 {
                     // log any unhandled exceptions and continue
-                    AddFunctionError(metadata.Name, ex.Message);
+                    AddFunctionError(metadata.Name, Utility.FlattenException(ex, includeSource: false));
                 }
             }
 
@@ -1103,7 +1116,7 @@ namespace Microsoft.Azure.WebJobs.Script
                 else
                 {
                     string settingName = (string)isDisabledValue;
-                    string value = Environment.GetEnvironmentVariable(settingName);
+                    string value = _settingsManager.GetSetting(settingName);
                     if (!string.IsNullOrEmpty(value) &&
                         (string.Compare(value, "1", StringComparison.OrdinalIgnoreCase) == 0 ||
                          string.Compare(value, "true", StringComparison.OrdinalIgnoreCase) == 0))
@@ -1118,7 +1131,7 @@ namespace Microsoft.Azure.WebJobs.Script
 
         private static bool IsDynamicSku()
         {
-            string hostingPlan = Environment.GetEnvironmentVariable(EnvironmentSettingNames.AzureWebsiteSku);
+            string hostingPlan = _settingsManager.GetSetting(EnvironmentSettingNames.AzureWebsiteSku);
             return hostingPlan != null && hostingPlan == "Dynamic";
         }
 

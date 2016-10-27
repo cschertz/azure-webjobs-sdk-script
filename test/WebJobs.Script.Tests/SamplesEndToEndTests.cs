@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 using System.Web.Http;
 using System.Xml.Linq;
 using Microsoft.Azure.WebJobs.Host;
+using Microsoft.Azure.WebJobs.Script.Config;
 using Microsoft.Azure.WebJobs.Script.Tests.Properties;
 using Microsoft.Azure.WebJobs.Script.WebHost;
 using Microsoft.Azure.WebJobs.Script.WebHost.Models;
@@ -32,11 +33,13 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
     [Trait("Category", "E2E")]
     public class SamplesEndToEndTests : IClassFixture<SamplesEndToEndTests.TestFixture>
     {
+        private readonly ScriptSettingsManager _settingsManager;
         private TestFixture _fixture;
 
         public SamplesEndToEndTests(TestFixture fixture)
         {
             _fixture = fixture;
+            _settingsManager = ScriptSettingsManager.Instance;
         }
 
         [Fact]
@@ -58,7 +61,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             }
 
             string connectionString = Environment.GetEnvironmentVariable("AzureWebJobsEventHubSender");
-            ServiceBusConnectionStringBuilder builder = new ServiceBusConnectionStringBuilder(connectionString);            
+            ServiceBusConnectionStringBuilder builder = new ServiceBusConnectionStringBuilder(connectionString);
             EventHubClient eventHubClient;
             if (!string.IsNullOrWhiteSpace(builder.EntityPath))
             {
@@ -66,7 +69,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             }
             else
             {
-                string eventHubPath = Environment.GetEnvironmentVariable("AzureWebJobsEventHubPath");
+                string eventHubPath = _settingsManager.GetSetting("AzureWebJobsEventHubPath");
                 eventHubClient = EventHubClient.CreateFromConnectionString(connectionString, eventHubPath);
             }
 
@@ -135,7 +138,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             // wait for completion
             CloudBlockBlob outputBlob = outputContainer.GetBlockBlobReference(outId);
             string result = await TestHelpers.WaitForBlobAndGetStringAsync(outputBlob);
-            Assert.Equal("Hello C#!", TestHelpers.RemoveByteOrderMark(result));
+            Assert.Equal("Hello C#!", Utility.RemoveUtf8ByteOrderMark(result));
         }
 
         [Fact]
@@ -183,7 +186,19 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, string.Empty);
 
             HttpResponseMessage response = await this._fixture.HttpClient.SendAsync(request);
-            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task Home_Get_WithHomepageDisabled_Succeeds()
+        {
+            using (new TestScopedSettings(_settingsManager, EnvironmentSettingNames.AzureWebJobsDisableHomepage, bool.TrueString))
+            {
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, string.Empty);
+
+                HttpResponseMessage response = await this._fixture.HttpClient.SendAsync(request);
+                Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            }
         }
 
         [Fact]
@@ -288,7 +303,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             json = await response.Content.ReadAsStringAsync();
             JArray products = JArray.Parse(json);
             Assert.Equal(2, products.Count);
-            
+
             // test a constraint violation (invalid id)
             uri = $"api/node/products/electronics/notaguid?code={functionKey}";
             request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -334,7 +349,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             string path = $"housewares/{id}";
             CloudBlockBlob outputBlob = outputContainer.GetBlockBlobReference(path);
             string result = await TestHelpers.WaitForBlobAndGetStringAsync(outputBlob);
-            JObject resultProduct = JObject.Parse(TestHelpers.RemoveByteOrderMark(result));
+            JObject resultProduct = JObject.Parse(Utility.RemoveUtf8ByteOrderMark(result));
             Assert.Equal(id, (string)resultProduct["id"]);
             Assert.Equal((string)product["name"], (string)resultProduct["name"]);
         }
@@ -353,7 +368,17 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             string json = await response.Content.ReadAsStringAsync();
             var product = JObject.Parse(json);
             Assert.Equal("electronics", (string)product["Category"]);
-            Assert.Equal(123, (int)product["Id"]);
+            Assert.Equal(123, (int?)product["Id"]);
+
+            // now try again without specifying optional id parameter
+            uri = $"api/csharp/products/electronics?code={functionKey}";
+            request = new HttpRequestMessage(HttpMethod.Get, uri);
+            response = await this._fixture.HttpClient.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            json = await response.Content.ReadAsStringAsync();
+            product = JObject.Parse(json);
+            Assert.Equal("electronics", (string)product["Category"]);
+            Assert.Null((int?)product["Id"]);
 
             // test a constraint violation (invalid id)
             uri = $"api/csharp/products/electronics/1x3?code={functionKey}";
@@ -804,6 +829,8 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
 
             AssemblyFileVersionAttribute fileVersionAttr = typeof(HostStatus).Assembly.GetCustomAttribute<AssemblyFileVersionAttribute>();
             string expectedVersion = fileVersionAttr.Version;
+            string expectedId = "5a709861cab44e68bfed5d2c2fe7fc0c";
+            Assert.Equal(expectedId, jsonContent["id"].ToString());
             Assert.Equal(expectedVersion, jsonContent["version"].ToString());
 
             // Now ensure XML content works
@@ -818,6 +845,8 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             XDocument doc = XDocument.Parse(content);
             var node = doc.Descendants(XName.Get("Version", ns)).Single();
             Assert.Equal(expectedVersion, node.Value);
+            node = doc.Descendants(XName.Get("Id", ns)).Single();
+            Assert.Equal(expectedId, node.Value);
 
             node = doc.Descendants(XName.Get("Errors", ns)).Single();
             Assert.True(node.IsEmpty);
@@ -834,12 +863,13 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
 
         public class TestFixture : IDisposable
         {
+            private readonly ScriptSettingsManager _settingsManager;
             private HttpConfiguration _config;
 
             public TestFixture()
             {
                 _config = new HttpConfiguration();
-
+                _settingsManager = ScriptSettingsManager.Instance;
                 HostSettings = new WebHostSettings
                 {
                     IsSelfHost = true,
@@ -847,7 +877,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
                     LogPath = Path.Combine(Path.GetTempPath(), @"Functions"),
                     SecretsPath = Path.Combine(Environment.CurrentDirectory, @"..\..\..\..\src\WebJobs.Script.WebHost\App_Data\Secrets")
                 };
-                WebApiConfig.Register(_config, HostSettings);
+                WebApiConfig.Register(_config, _settingsManager, HostSettings);
 
                 HttpServer = new HttpServer(_config);
                 this.HttpClient = new HttpClient(HttpServer);
@@ -906,7 +936,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
                 {
                     using (HttpResponseMessage response = this.HttpClient.SendAsync(request).Result)
                     {
-                        return response.StatusCode == HttpStatusCode.NoContent;
+                        return response.StatusCode == HttpStatusCode.NoContent || response.StatusCode == HttpStatusCode.OK;
                     }
                 }
             }

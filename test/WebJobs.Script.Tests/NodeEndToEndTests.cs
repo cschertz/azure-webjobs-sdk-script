@@ -210,35 +210,6 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
         }
 
         [Fact]
-        public async Task Scenario_DoneCalledMultipleTimes_ErrorIsLogged()
-        {
-            TestHelpers.ClearFunctionLogs("Scenarios");
-
-            JObject input = new JObject
-            {
-                { "scenario", "doubleDone" }
-            };
-            Dictionary<string, object> arguments = new Dictionary<string, object>
-            {
-                { "input", input.ToString() }
-            };
-
-            // call a few times since this is a timing related error
-            for (int i = 0; i < 3; i++)
-            {
-                await Fixture.Host.CallAsync("Scenarios", arguments);
-            }
-
-            var logs = await TestHelpers.GetFunctionLogsAsync("Scenarios");
-
-            // verify an error was written at least once
-            Assert.True(logs.Any(p => p.Contains("Error: 'done' has already been called. Please check your script for extraneous calls to 'done'.")));
-
-            // verify the function completed successfully each time
-            Assert.Equal(3, logs.Count(p => p.Contains("Function completed (Success")));
-        }
-
-        [Fact]
         public async Task Scenario_Logging()
         {
             TestHelpers.ClearFunctionLogs("Scenarios");
@@ -355,6 +326,45 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
                 { "request", request }
             };
             await Fixture.Host.CallAsync("HttpTrigger", arguments);
+
+            HttpResponseMessage response = (HttpResponseMessage)request.Properties[ScriptConstants.AzureFunctionsHttpResponseKey];
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            Assert.Equal("Test Response Header", response.Headers.GetValues("test-header").SingleOrDefault());
+            Assert.Equal(MediaTypeHeaderValue.Parse("application/json; charset=utf-8"), response.Content.Headers.ContentType);
+
+            string body = await response.Content.ReadAsStringAsync();
+            JObject resultObject = JObject.Parse(body);
+            Assert.Equal("undefined", (string)resultObject["reqBodyType"]);
+            Assert.Null((string)resultObject["reqBody"]);
+            Assert.Equal("undefined", (string)resultObject["reqRawBodyType"]);
+            Assert.Null((string)resultObject["reqRawBody"]);
+
+            // verify binding data was populated from query parameters
+            Assert.Equal("Mathew Charles", (string)resultObject["bindingData"]["name"]);
+            Assert.Equal("Seattle", (string)resultObject["bindingData"]["location"]);
+
+            // validate input headers
+            JObject reqHeaders = (JObject)resultObject["reqHeaders"];
+            Assert.Equal("Test Request Header", reqHeaders["test-header"]);
+        }
+
+        [Fact]
+        public async Task HttpTriggerExpressApi_Get()
+        {
+            HttpRequestMessage request = new HttpRequestMessage
+            {
+                RequestUri = new Uri(string.Format("http://localhost/api/httptrigger?name=Mathew%20Charles&location=Seattle")),
+                Method = HttpMethod.Get,
+            };
+            request.SetConfiguration(new HttpConfiguration());
+            request.Headers.Add("test-header", "Test Request Header");
+
+            Dictionary<string, object> arguments = new Dictionary<string, object>
+            {
+                { "request", request }
+            };
+            await Fixture.Host.CallAsync("HttpTriggerExpressApi", arguments);
 
             HttpResponseMessage response = (HttpResponseMessage)request.Properties[ScriptConstants.AzureFunctionsHttpResponseKey];
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -683,6 +693,30 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
         }
 
         [Fact]
+        public async Task MultipleInputs()
+        {
+            string id = Guid.NewGuid().ToString();
+
+            JObject input = new JObject
+            {
+                { "id", id },
+                { "rk1", "001" },
+                { "rk2", "002" }
+            };
+            Dictionary<string, object> arguments = new Dictionary<string, object>
+            {
+                { "input", input.ToString() }
+            };
+            await Fixture.Host.CallAsync("MultipleInputs", arguments);
+
+            // verify the correct output blob was written
+            var blob = Fixture.TestOutputContainer.GetBlockBlobReference(id);
+            await TestHelpers.WaitForBlobAsync(blob);
+            string blobContent = blob.DownloadText();
+            Assert.Equal("Test Entity 1, Test Entity 2", Utility.RemoveUtf8ByteOrderMark(blobContent.Trim()));
+        }
+
+        [Fact]
         public async Task ApiHubTableEntityIn()
         {
             TestHelpers.ClearFunctionLogs("ApiHubTableEntityIn");
@@ -850,14 +884,20 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             };
 
             // call multiple times to reduce flakiness (function can exit before Promise.resolve executes)
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 10; i++)
             {
-                await Task.WhenAny(Fixture.Host.CallAsync("Scenarios", arguments), Task.Delay(3000));
+                await Task.WhenAny(Fixture.Host.CallAsync("Scenarios", arguments), Task.Delay(2000));
+
+                var logs = await TestHelpers.GetFunctionLogsAsync("Scenarios");
+                if (logs.Any(p => p.Contains("Error: Choose either to return a promise or call 'done'.  Do not use both in your script.")))
+                {
+                    // short circuit if we find log
+                    return;
+                }
             }
 
-            var logs = await TestHelpers.GetFunctionLogsAsync("Scenarios");
-            Assert.True(logs.Any(p => p.Contains("Error: Choose either to return a promise or call 'done'.  Do not use both in your script.")));
-            Assert.True(logs.Any(p => p.Contains("Function completed (Success")));
+            // this should never be reached
+            Assert.True(false, "There was no log found for duplicate calls to done");
         }
 
         public class TestFixture : EndToEndTestFixture

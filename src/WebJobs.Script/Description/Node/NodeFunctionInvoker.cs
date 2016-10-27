@@ -17,8 +17,6 @@ using Microsoft.Azure.WebJobs.Script.Binding;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-using Binder = Microsoft.Azure.WebJobs.Host.Bindings.Runtime.Binder;
-
 namespace Microsoft.Azure.WebJobs.Script.Description
 {
     // TODO: make this internal
@@ -200,7 +198,7 @@ namespace Microsoft.Azure.WebJobs.Script.Description
                 // get the output value from the script
                 object value = null;
                 bool haveValue = bindings.TryGetValue(binding.Metadata.Name, out value);
-                if (!haveValue && binding.Metadata.Type == "http")
+                if (!haveValue && string.Compare(binding.Metadata.Type, "http", StringComparison.OrdinalIgnoreCase) == 0)
                 {
                     // http bindings support a special context.req/context.res programming
                     // model, so we must map that back to the actual binding name if a value
@@ -334,14 +332,16 @@ namespace Microsoft.Azure.WebJobs.Script.Description
                     !string.IsNullOrEmpty(httpBinding.WebHookType))
                 {
                     input = requestObject["body"];
-
-                    // make the entire request object available as well
-                    // this is symmetric with context.res which we also support
-                    context["req"] = requestObject;
                 }
+
+                // make the entire request object available as well
+                // this is symmetric with context.res which we also support
+                context["req"] = requestObject;
             }
             else if (input is TimerInfo)
             {
+                // TODO: Need to generalize this model rather than hardcode
+                // so other extensions can also express their Node.js object model
                 TimerInfo timerInfo = (TimerInfo)input;
                 var inputValues = new Dictionary<string, object>()
                 {
@@ -372,6 +372,8 @@ namespace Microsoft.Azure.WebJobs.Script.Description
             }
 
             bindings.Add(_trigger.Name, input);
+
+            context.Add("_triggerType", _trigger.Type);
 
             return context;
         }
