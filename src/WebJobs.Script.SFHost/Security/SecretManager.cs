@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using Microsoft.Azure.WebJobs.Host;
+using Microsoft.Azure.WebJobs.Script.Config;
 
 namespace Microsoft.Azure.WebJobs.Script.WebHost
 {
@@ -26,12 +27,12 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
         {
         }
 
-        public SecretManager(string secretsPath)
-            : this(secretsPath, new DefaultKeyValueConverterFactory())
+        public SecretManager(ScriptSettingsManager settingsManager, string secretsPath, bool createHostSecretsIfMissing = false)
+            : this(secretsPath, new DefaultKeyValueConverterFactory(settingsManager), createHostSecretsIfMissing)
         {
         }
 
-        public SecretManager(string secretsPath, IKeyValueConverterFactory keyValueConverterFactory)
+        public SecretManager(string secretsPath, IKeyValueConverterFactory keyValueConverterFactory, bool createHostSecretsIfMissing = false)
         {
             _secretsPath = secretsPath;
             _hostSecretsPath = Path.Combine(_secretsPath, ScriptConstants.HostMetadataFileName);
@@ -49,6 +50,13 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
             _fileWatcher.Created += OnChanged;
             _fileWatcher.Deleted += OnChanged;
             _fileWatcher.Renamed += OnChanged;
+
+            if (createHostSecretsIfMissing)
+            {
+                // The SecretManager implementation of GetHostSecrets will
+                // create a host secret if one is not present.
+                GetHostSecrets();
+            }
         }
 
         public void Dispose()
@@ -113,8 +121,15 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 string secretsFilePath = GetFunctionSecretsFilePath(functionName);
                 if (!TryLoadFunctionSecrets(functionName, out secrets, secretsFilePath))
                 {
-                    // initialize an empty FunctionSecrets instance
-                    secrets = new FunctionSecrets();
+                    secrets = new FunctionSecrets
+                    {
+                        Keys = new List<Key>
+                        {
+                            GenerateKey(ScriptConstants.DefaultFunctionKeyName)
+                        }
+                    };
+
+                    PersistSecrets(secrets, secretsFilePath);
                 }
 
                 // Read all secrets, which will run the keys through the appropriate readers

@@ -13,7 +13,7 @@ namespace WebJobs.Script.SFHost
     internal class OwinCommunicationListener : ICommunicationListener
     {
         private readonly ServiceEventSource eventSource;
-        private readonly Action<IAppBuilder> startup;
+        private readonly Action<IAppBuilder, ICodePackageActivationContext> startup;
         private readonly ServiceContext serviceContext;
         private readonly string endpointName;
         private readonly string appRoot;
@@ -22,12 +22,12 @@ namespace WebJobs.Script.SFHost
         private string publishAddress;
         private string listeningAddress;
 
-        public OwinCommunicationListener(Action<IAppBuilder> startup, ServiceContext serviceContext, ServiceEventSource eventSource, string endpointName)
+        public OwinCommunicationListener(Action<IAppBuilder, ICodePackageActivationContext> startup, ServiceContext serviceContext, ServiceEventSource eventSource, string endpointName)
             : this(startup, serviceContext, eventSource, endpointName, null)
         {
         }
 
-        public OwinCommunicationListener(Action<IAppBuilder> startup, ServiceContext serviceContext, ServiceEventSource eventSource, string endpointName, string appRoot)
+        public OwinCommunicationListener(Action<IAppBuilder, ICodePackageActivationContext> startup, ServiceContext serviceContext, ServiceEventSource eventSource, string endpointName, string appRoot)
         {
             if (startup == null)
             {
@@ -99,7 +99,7 @@ namespace WebJobs.Script.SFHost
             {
                 this.eventSource.ServiceMessage(this.serviceContext, "Starting web server on " + this.listeningAddress);
 
-                this.webApp = WebApp.Start(this.listeningAddress, appBuilder => this.startup.Invoke(appBuilder));
+                this.webApp = WebApp.Start(this.listeningAddress, appBuilder => this.startup.Invoke(appBuilder, serviceContext.CodePackageActivationContext));
 
                 this.eventSource.ServiceMessage(this.serviceContext, "Listening on " + this.publishAddress);
 

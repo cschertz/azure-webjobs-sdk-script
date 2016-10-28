@@ -20,6 +20,7 @@ using Microsoft.Azure.WebJobs.Host;
 using Microsoft.Azure.WebJobs.Host.Loggers;
 using Microsoft.Azure.WebJobs.Host.Timers;
 using Microsoft.Azure.WebJobs.Script.Binding;
+using Microsoft.Azure.WebJobs.Script.Config;
 using Microsoft.Azure.WebJobs.Script.Description;
 using Microsoft.Azure.WebJobs.Script.Diagnostics;
 using Microsoft.Azure.WebJobs.Script.WebHost.Diagnostics;
@@ -41,8 +42,8 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
         private IDictionary<IHttpRoute, FunctionDescriptor> _httpFunctions;
         private HttpRouteCollection _httpRoutes;
 
-        public WebScriptHostManager(ScriptHostConfiguration config, ISecretManager secretManager, WebHostSettings webHostSettings, IScriptHostFactory scriptHostFactory = null)
-            : base(config, scriptHostFactory)
+        public WebScriptHostManager(ScriptHostConfiguration config, ISecretManager secretManager, ScriptSettingsManager settingsManager, WebHostSettings webHostSettings, IScriptHostFactory scriptHostFactory = null)
+            : base(config, settingsManager, scriptHostFactory)
         {
             _config = config;
             _metricsLogger = new WebHostMetricsLogger();
@@ -51,7 +52,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
             _webHostSettings = webHostSettings;
 
             var systemEventGenerator = config.HostConfig.GetService<IEventGenerator>() ?? new EventGenerator();
-            var systemTraceWriter = new SystemTraceWriter(systemEventGenerator, TraceLevel.Verbose);
+            var systemTraceWriter = new SystemTraceWriter(systemEventGenerator, settingsManager, TraceLevel.Verbose);
             if (config.TraceWriter != null)
             {
                 config.TraceWriter = new CompositeTraceWriter(new TraceWriter[] { config.TraceWriter, systemTraceWriter });
@@ -62,8 +63,8 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
             }
         }
 
-        public WebScriptHostManager(ScriptHostConfiguration config, ISecretManager secretManager, WebHostSettings webHostSettings)
-            : this(config, secretManager, webHostSettings, new ScriptHostFactory())
+        public WebScriptHostManager(ScriptHostConfiguration config, ISecretManager secretManager, ScriptSettingsManager settingsManager, WebHostSettings webHostSettings)
+            : this(config, secretManager, settingsManager, webHostSettings, new ScriptHostFactory())
         {
         }
 
@@ -71,7 +72,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
         {
             get
             {
-                return !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(EnvironmentSettingNames.AzureWebsiteInstanceId));
+                return !string.IsNullOrEmpty(ScriptSettingsManager.Instance.GetSetting(EnvironmentSettingNames.AzureWebsiteInstanceId));
             }
         }
 
@@ -99,7 +100,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 {
                     return _standbyMode.Value;
                 }
-                if (Environment.GetEnvironmentVariable(EnvironmentSettingNames.AzureWebsitePlaceholderMode) == "1")
+                if (ScriptSettingsManager.Instance.GetSetting(EnvironmentSettingNames.AzureWebsitePlaceholderMode) == "1")
                 {
                     return true;
                 }
@@ -219,7 +220,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 config.HostConfig.StorageConnectionString = null;
                 config.HostConfig.DashboardConnectionString = null;
 
-                host = ScriptHost.Create(config);
+                host = ScriptHost.Create(ScriptSettingsManager.Instance, config);
                 traceWriter.Info(string.Format("Starting Host (Id={0})", host.ScriptConfig.HostConfig.HostId));
 
                 host.Start();
@@ -347,25 +348,28 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
             if (routeData != null)
             {
                 _httpFunctions.TryGetValue(routeData.Route, out function);
-
-                Dictionary<string, object> routeDataValues = null;
-                if (routeData.Values != null)
-                {
-                    routeDataValues = new Dictionary<string, object>();
-                    foreach (var pair in routeData.Values)
-                    {
-                        // filter out any unspecified optional parameters
-                        if (pair.Value != RouteParameter.Optional)
-                        {
-                            routeDataValues.Add(pair.Key, pair.Value);
-                        }
-                    }
-                }
-
-                request.Properties.Add(ScriptConstants.AzureFunctionsHttpRouteDataKey, routeDataValues);
+                AddRouteDataToRequest(routeData, request);
             }
 
             return function;
+        }
+
+        internal static void AddRouteDataToRequest(IHttpRouteData routeData, HttpRequestMessage request)
+        {
+            if (routeData.Values != null)
+            {
+                Dictionary<string, object> routeDataValues = new Dictionary<string, object>();
+                foreach (var pair in routeData.Values)
+                {
+                    // translate any unspecified optional parameters to null values
+                    // unspecified values still need to be included as part of binding data
+                    // for correct binding to occur
+                    var value = pair.Value != RouteParameter.Optional ? pair.Value : null;
+                    routeDataValues.Add(pair.Key, value);
+                }
+
+                request.Properties.Add(ScriptConstants.AzureFunctionsHttpRouteDataKey, routeDataValues);
+            } 
         }
 
         protected override void OnInitializeConfig(ScriptHostConfiguration config)
@@ -388,7 +392,9 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
             var dashboardString = AmbientConnectionStringProvider.Instance.GetConnectionString(ConnectionStringNames.Dashboard);
             if (dashboardString != null)
             {
-                var fastLogger = new FastLogger(dashboardString);
+                // hostId may be missing in local test scenarios. 
+                var hostId = config.HostConfig.HostId ?? "default";
+                var fastLogger = new FastLogger(hostId, dashboardString);
                 hostConfig.AddService<IAsyncCollector<FunctionInstanceLogEntry>>(fastLogger);
             }
             hostConfig.DashboardConnectionString = null; // disable slow logging
@@ -406,7 +412,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
             _secretManager.PurgeOldFiles(Instance.ScriptConfig.RootScriptPath, Instance.TraceWriter);
         }
 
-        internal void InitializeHttpFunctions(Collection<FunctionDescriptor> functions)
+        internal void InitializeHttpFunctions(IEnumerable<FunctionDescriptor> functions)
         {
             // we must initialize the route factory here AFTER full configuration
             // has been resolved so we apply any route prefix customizations
@@ -420,8 +426,11 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost
                 var httpTriggerBinding = function.Metadata.InputBindings.OfType<HttpTriggerBindingMetadata>().SingleOrDefault();
                 if (httpTriggerBinding != null)
                 {
-                    var httpRoute = httpRouteFactory.AddRoute(function.Metadata.Name, httpTriggerBinding.Route, httpTriggerBinding.Methods, _httpRoutes);
-                    _httpFunctions.Add(httpRoute, function);
+                    IHttpRoute httpRoute = null;
+                    if (httpRouteFactory.TryAddRoute(function.Metadata.Name, httpTriggerBinding.Route, httpTriggerBinding.Methods, _httpRoutes, out httpRoute))
+                    {
+                        _httpFunctions.Add(httpRoute, function);
+                    }
                 }
             }
         }
